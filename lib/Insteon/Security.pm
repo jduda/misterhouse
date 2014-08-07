@@ -2,8 +2,6 @@
 
 =head2 SYNOPSIS
 
-Configuration:
-
 In user code:
 
    use Insteon::MotionSensor;
@@ -86,7 +84,7 @@ contains a specific light and voltage level, as opposed to the simple binary
 states provided by the GROUP method.
 
 To use this method, set the C<set_query_time()> routine.
-	
+
 You can further create child objects that automatically track the state of the 
 light and voltage levels.  These objects allow you to display the state of the
 light and voltage levels on the MisterHouse webpage.  The child objects are 
@@ -96,7 +94,7 @@ certain threshold.
 
 =head2 INHERITS
 
-B<Insteon::BaseDevice>, B<Insteon::DeviceController>
+L<Insteon::BaseDevice|Insteon::BaseInsteon/Insteon::BaseDevice>, 
 
 =head2 METHODS
 
@@ -109,34 +107,27 @@ package Insteon::MotionSensor;
 use strict;
 use Insteon::BaseInsteon;
 
-@Insteon::MotionSensor::ISA = ('Insteon::DeviceController','Insteon::BaseDevice');
+@Insteon::MotionSensor::ISA = ('Insteon::BaseDevice');
 
-my %message_types = (
-	%Insteon::BaseDevice::message_types,
-	extended_set_get => 0x2e
-);
+=item C<new()>
+
+Instantiates a new object.
+
+=cut
 
 sub new
 {
 	my ($class,$p_deviceid,$p_interface) = @_;
 
 	my $self = new Insteon::BaseDevice($p_deviceid,$p_interface);
-	$$self{message_types} = \%message_types;
 	if ($self->is_root){ 
 		$self->restore_data('query_timer', 'last_query_time');
 		$$self{queue_timer} = new Timer;
 	}
 	bless $self,$class;
+	$$self{is_responder} = 0;
+	$$self{is_deaf} = 1;
 	return $self;
-}
-
-sub set
-{
-	my ($self, $p_state, $p_setby, $p_respond) = @_;
-
-	my $link_state = &Insteon::BaseObject::derive_link_state($p_state);
-
-	return $self->Insteon::DeviceController::set($link_state, $p_setby, $p_respond);
 }
 
 =item C<get_extended_info()>
@@ -356,6 +347,13 @@ sub enable_all_motion {
 	return;
 }
 
+=item C<_is_query_time_expired()>
+
+Returns true if the last battery level response received by MisterHouse is older
+than C<set_timeout>.
+
+=cut
+
 sub _is_query_time_expired {
 	my ($self) = @_;
 	my $root = $self->get_root();
@@ -366,6 +364,14 @@ sub _is_query_time_expired {
 	return 0;
 }
 
+=item C<_process_message()>
+
+Processes unique messages sent to the device, notably battery level messages, and
+settings messages but passes the rest of the messages off to 
+L<Insteon::BaseObject|Insteon::BaseInsteon/Insteon::BaseObject>.
+
+=cut
+
 sub _process_message {
 	my ($self,$p_setby,%msg) = @_;
 	my $clear_message = 0;
@@ -375,10 +381,17 @@ sub _process_message {
 		my $no_retry = 1;
 		$root->get_extended_info($no_retry);
 	}
-	if ($msg{command} eq "extended_set_get" && $msg{is_ack}){
+	my $pending_cmd = ($$self{_prior_msg}) ? $$self{_prior_msg}->command : $msg{command};
+	my $ack_setby = (ref $$self{m_status_request_pending}) ? $$self{m_status_request_pending} : $p_setby;
+	if ($msg{is_ack} && $self->_is_info_request($pending_cmd,$ack_setby,%msg)) {
+		$clear_message = 1;
+		$$self{m_status_request_pending} = 0;
+		$self->_process_command_stack(%msg);
+	}
+	elsif ($msg{command} eq "extended_set_get" && $msg{is_ack}){
 		$self->default_hop_count($msg{maxhops}-$msg{hopsleft});
 		#If this was a get request don't clear until data packet received
-		main::print_log("[Insteon::MotionSensor] Extended Set/Get ACK Received for " . $self->get_object_name) if $main::Debug{insteon};
+		main::print_log("[Insteon::MotionSensor] Extended Set/Get ACK Received for " . $self->get_object_name) if $self->debuglevel(1, 'insteon');
 		if ($$self{_ext_set_get_action} eq 'set'){
 			if (defined($$root{_set_bit_action})){
 				::print_log("[Insteon::MotionSensor] Set of ".
@@ -386,7 +399,7 @@ sub _process_message {
 					$root->get_object_name);
 				$$root{_set_bit_action} = undef;
 			} else {
-				main::print_log("[Insteon::MotionSensor] Clearing active message") if $main::Debug{insteon};
+				main::print_log("[Insteon::MotionSensor] Clearing active message") if $self->debuglevel(1, 'insteon');
 			}
 			$clear_message = 1;
 			$$self{_ext_set_get_action} = undef;
@@ -441,7 +454,7 @@ sub _process_message {
 			$self->_process_command_stack(%msg);
 		} else {
 			main::print_log("[Insteon::MotionSensor] WARN: Unknown Extended "
-				."Set/Get Data Message Received for ". $self->get_object_name) if $main::Debug{insteon};
+				."Set/Get Data Message Received for ". $self->get_object_name) if $self->debuglevel(1, 'insteon');
 		}
 	}
 	else {
@@ -450,12 +463,49 @@ sub _process_message {
 	return $clear_message;
 }
 
-sub is_responder
+=item C<get_voice_cmds>
+
+Returns a hash of voice commands where the key is the voice command name and the
+value is the perl code to run when the voice command name is called.
+
+Higher classes which inherit this object may add to this list of voice commands by
+redefining this routine while inheriting this routine using the SUPER function.
+
+This routine is called by L<Insteon::generate_voice_commands> to generate the
+necessary voice commands.
+
+=cut 
+
+sub get_voice_cmds
 {
-   return 0;
+    my ($self) = @_;
+    my $object_name = $self->get_object_name;
+    my %voice_cmds = (
+        %{$self->SUPER::get_voice_cmds},
+        'enable night only' => "$object_name->enable_night_only(1)",
+        'disable night only' => "$object_name->enable_night_only(0)",
+        'enable on only mode' => "$object_name->enable_on_only(1)",
+        'disable on only mode' => "$object_name->enable_on_only(0)",
+        'enable all motion mode' => "$object_name->enable_all_motion(1)",
+        'disable all motion mode' => "$object_name->enable_all_motion(0)"
+    );
+    return \%voice_cmds;
 }
 
+
 =back
+
+=head2 AUTHOR
+
+Kevin Robert Keegan, Gregg Limming
+
+=head2 LICENSE
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, write to the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 =head1 B<Insteon::MotionSensor_Battery>
 
@@ -487,7 +537,7 @@ battery_low_event code in the parent B<Insteon::MotionSensor> object.
 
 =head2 INHERITS
 
-B<Generic_Item>
+L<Generic_Item|Generic_Item>
 
 =head2 METHODS
 
@@ -500,6 +550,12 @@ use strict;
 
 @Insteon::MotionSensor_Battery::ISA = ('Generic_Item');
 
+=item C<new()>
+
+Instantiates a new object.
+
+=cut
+
 sub new {
 	my ($class, $parent) = @_;
 	my $self = new Generic_Item();
@@ -509,12 +565,30 @@ sub new {
 	return $self;
 }
 
+=item C<set_receive()>
+
+Handles state updates provided by the parent object.
+
+=cut
+
 sub set_receive {
 	my ($self, $p_state) = @_;
 	$self->SUPER::set($p_state);
 }
 
 =back
+
+=head2 AUTHOR
+
+Kevin Robert Keegan
+
+=head2 LICENSE
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, write to the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 =head1 B<Insteon::MotionSensor_Light_level>
 
@@ -547,7 +621,7 @@ B<Insteon::MotionSensor> object.
 
 =head2 INHERITS
 
-B<Generic_Item>
+L<Generic_Item|Generic_Item>
 
 =head2 METHODS
 
@@ -560,6 +634,12 @@ use strict;
 
 @Insteon::MotionSensor_Light_Level::ISA = ('Generic_Item');
 
+=item C<new()>
+
+Instantiates a new object.
+
+=cut
+
 sub new {
 	my ($class, $parent) = @_;
 	my $self = new Generic_Item();
@@ -568,6 +648,12 @@ sub new {
 	$$root{light_level_object} = $self;
 	return $self;
 }
+
+=item C<set_receive()>
+
+Handles state updates provided by the parent object.
+
+=cut
 
 sub set_receive {
 	my ($self, $p_state) = @_;
@@ -582,11 +668,191 @@ None.
 
 =head2 AUTHOR
 
-Bruce Winter, Gregg Limming, Kevin Robert Keegan
+Kevin Robert Keegan
 
-=head2 SEE ALSO
+=head2 LICENSE
 
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
 
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program; if not, write to the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+=head1 B<Insteon::TriggerLinc>
+
+=head2 SYNOPSIS
+
+Configuration:
+	
+In user code:
+
+   use Insteon::TriggerLinc;
+   $trigger = new Insteon::TriggerLinc('12.34.56:01',$myPLM);
+
+In items.mht:
+
+   INSTEON_TRIGGERLINC, 12.34.56:01, $trigger, $trigger_group
+
+=head2 DESCRIPTION
+
+Provides support for Insteon TriggerLinc devices.  These are relatively simple
+devices that provide open and closed messages but not much else. Other than the 
+awake time, there are no other software configurable options.
+
+NOTE: There is a hardware configurable option which allows ON messages to be sent
+as group 1 and OFF messages to be sent as group 2.  If you enable this function
+you will likely want to define and link the group 2 object by replacing ":01" 
+with ":02" in the above examples.
+
+=head3 Link Management
+
+As battery operated devices, these devices are generally asleep.  If you want
+MH to manage the links on these devices you need to wake them up, generally this
+involves holding down the set button until the light flashes.
+
+Alternatively, if you set the awake time sufficiently high MH will be able to 
+initiate a communication with these devices for that many seconds after there
+is activity (open/close) from these devices.  This of course comes at the 
+expense of additional battery usage.
+
+=head2 INHERITS
+
+L<Insteon::BaseDevice|Insteon::BaseInsteon/Insteon::BaseDevice>
+
+=head2 METHODS
+
+=over
+
+=cut
+
+package Insteon::TriggerLinc;
+
+use strict;
+use Insteon::BaseInsteon;
+
+@Insteon::TriggerLinc::ISA = ('Insteon::BaseDevice');
+
+my %message_types = (
+	%Insteon::BaseDevice::message_types
+);
+
+=item C<new()>
+
+Instantiates a new object.
+
+=cut
+
+sub new
+{
+	my ($class,$p_deviceid,$p_interface) = @_;
+
+	my $self = new Insteon::BaseDevice($p_deviceid,$p_interface);
+        $$self{message_types} = \%message_types;
+	bless $self,$class;
+	$$self{is_responder} = 0;
+	$$self{is_deaf} = 1;
+	return $self;
+}
+
+=item C<set_awake_time([0-255 seconds])>
+
+Sets the amount of time, in seconds, that the TriggerLinc will remain "awake" 
+after sending a command.  While awake, the device can be queried by MH such as 
+with scan link table or sync links.
+
+=cut
+
+sub set_awake_time {
+	my ($self, $awake) = @_;
+	$awake = sprintf("%02x", $awake);
+	my $root = $self->get_root();
+	my $extra = '000102' . $awake . '0000000000000000000000';
+	$$root{_ext_set_get_action} = "set";
+	my $message = new Insteon::InsteonMessage('insteon_ext_send', $root, 'extended_set_get', $extra);
+	$root->_send_cmd($message);
+	return;
+}
+
+=item C<get_extended_info()>
+
+Requests the status of various settings on the device.  Currently this is only
+used to obtain the awake time.  If the device is awake, the awake time setting 
+will be printed to the log.
+
+=cut
+
+sub get_extended_info {
+	my ($self,$no_retry) = @_;
+	my $root = $self->get_root();
+	my $extra = '000100000000000000000000000000';
+	$$root{_ext_set_get_action} = "get";
+	my $message = new Insteon::InsteonMessage('insteon_ext_send', $root, 'extended_set_get', $extra);
+	if ($no_retry){
+		$message->retry_count(1);
+	}
+	$root->_send_cmd($message);
+	return;
+}
+
+=item C<_process_message()>
+
+Checks for and handles unique TriggerLinc messages. 
+All other messages are transferred to L<Insteon::BaseObject::_process_message()|Insteon::BaseInsteon/Insteon::BaseObject>.
+
+=cut
+
+sub _process_message {
+	my ($self,$p_setby,%msg) = @_;
+	my $clear_message = 0;
+	my $root = $self->get_root();
+	my $pending_cmd = ($$self{_prior_msg}) ? $$self{_prior_msg}->command : $msg{command};
+	my $ack_setby = (ref $$self{m_status_request_pending}) ? $$self{m_status_request_pending} : $p_setby;
+	if ($msg{is_ack} && $self->_is_info_request($pending_cmd,$ack_setby,%msg)) {
+		$clear_message = 1;
+		$$self{m_status_request_pending} = 0;
+		$self->_process_command_stack(%msg);
+	}
+	elsif ($msg{command} eq "extended_set_get" && $msg{is_ack}){
+		$self->default_hop_count($msg{maxhops}-$msg{hopsleft});
+		#If this was a get request don't clear until data packet received
+		main::print_log("[Insteon::TriggerLinc] Extended Set/Get ACK Received for " . $self->get_object_name) if $self->debuglevel(1, 'insteon');
+		if ($$self{_ext_set_get_action} eq 'set'){
+			main::print_log("[Insteon::TriggerLinc] Clearing active message") if $self->debuglevel(1, 'insteon');
+			$clear_message = 1;
+			$$self{_ext_set_get_action} = undef;
+			$self->_process_command_stack(%msg);	
+		}
+	}
+	elsif ($msg{command} eq "extended_set_get" && $msg{is_extended}) {
+		if (substr($msg{extra},0,6) eq "000001") {
+			$self->default_hop_count($msg{maxhops}-$msg{hopsleft});
+			#D3 = Awake Time;
+			my $awake = (hex(substr($msg{extra}, 6, 2)));
+			main::print_log("[Insteon::TriggerLinc] The awake seconds ".
+				"for device ". $self->get_object_name . " is set to: ".
+				$awake);
+			$clear_message = 1;
+			$self->_process_command_stack(%msg);
+		} else {
+			main::print_log("[Insteon::TriggerLinc] WARN: Corrupt Extended "
+				."Set/Get Data Received for ". $self->get_object_name) if $self->debuglevel(1, 'insteon');
+		}
+	}
+	else {
+		$clear_message = $self->SUPER::_process_message($p_setby,%msg);
+	}
+	return $clear_message;
+}
+
+=back
+
+=head2 INI PARAMETERS
+
+None.
+
+=head2 AUTHOR
+
+Kevin Robert Keegan
 
 =head2 LICENSE
 
@@ -597,4 +863,5 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 You should have received a copy of the GNU General Public License along with this program; if not, write to the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 =cut
-1
+
+1;
