@@ -108,7 +108,7 @@ sub set
       $p_state = 'still';
    }
 
-	if ($p_state eq 'motion') { # Received ON
+	if (($p_state eq 'motion') or ($p_state eq 'still')) { # Received ON
 #		$main::DBI->prepare("insert into Events (Object,ObjectType,State) values ('$$self{object_name}','motion','$p_state');")->execute();
 		$$self{m_timeout}->set(2*60,$self);
 		$$self{m_timerCheck}->set($$self{'inactivity_time'}, $self);
