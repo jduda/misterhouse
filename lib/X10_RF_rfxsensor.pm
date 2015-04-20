@@ -78,19 +78,19 @@ sub rf_process_rfxsensor {
     $id = $rbytes[0];
 
     if ($rbytes[3] & 0x10) {      # device has no set temperature (set temp always 0x00)
-      use Switch;
-      switch ($rbytes[2]) {
-	  case 0x01  {&::print_log("$module: rfxsensor: info: sensor addresses incremented")}
-	  case 0x02  {&::print_log("$module: rfxsensor: info: battery low detected")}
-	  case 0x03  {&::print_log("$module: rfxsensor: info: conversion not ready, 1 retry is done")}
-	  case 0x81  {&::print_log("$module: rfxsensor: error: no 1-wire device connected")}
-	  case 0x82  {&::print_log("$module: rfxsensor: error: 1-Wire ROM CRC error")}
-	  case 0x83  {&::print_log("$module: rfxsensor: error: 1-Wire device connected is not a DS18B20 or DS2438")}
-	  case 0x84  {&::print_log("$module: rfxsensor: error: no end of read signal received from 1-Wire device")}
-	  case 0x85  {&::print_log("$module: rfxsensor: error: 1-Wire scratchpad CRC error")}
-	  case 0x86  {&::print_log("$module: rfxsensor: error: temperature conversion not ready in time")}
-	  case 0x87  {&::print_log("$module: rfxsensor: error: A/D conversion not ready in time")}
-      }
+#      use Switch;
+#      switch ($rbytes[2]) {
+#	  case 0x01  {&::print_log("$module: rfxsensor: info: sensor addresses incremented")}
+#	  case 0x02  {&::print_log("$module: rfxsensor: info: battery low detected")}
+#	  case 0x03  {&::print_log("$module: rfxsensor: info: conversion not ready, 1 retry is done")}
+#	  case 0x81  {&::print_log("$module: rfxsensor: error: no 1-wire device connected")}
+#	  case 0x82  {&::print_log("$module: rfxsensor: error: 1-Wire ROM CRC error")}
+#	  case 0x83  {&::print_log("$module: rfxsensor: error: 1-Wire device connected is not a DS18B20 or DS2438")}
+#	  case 0x84  {&::print_log("$module: rfxsensor: error: no end of read signal received from 1-Wire device")}
+#	  case 0x85  {&::print_log("$module: rfxsensor: error: 1-Wire scratchpad CRC error")}
+#	  case 0x86  {&::print_log("$module: rfxsensor: error: temperature conversion not ready in time")}
+#	  case 0x87  {&::print_log("$module: rfxsensor: error: A/D conversion not ready in time")}
+#      }
     }
     else {
       $measurement = $rbytes[2] * 8 + ($rbytes[3] >> 5);

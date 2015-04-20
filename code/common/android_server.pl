@@ -217,7 +217,7 @@ sub android_send_message ( ) {
 	    $android_server->set( (join '?', $function, $outData), $client);
 	}
     } else {
-	&print_log("client_ip: $client_ip inactive");
+	&print_log("client_ip: $client_ip inactive") if $Debug{android};
 	delete $androidClients{$client_ip};
     }
 }

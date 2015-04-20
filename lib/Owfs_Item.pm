@@ -269,23 +269,23 @@ sub process_read_response {
 	&main::print_log ("Owfs_Item::process_read_response device: $device location: $location token: $token response: $response") if $debug;
 	my $state = $self->convert_state($response);
 	if ($state ne $self->state( )) {
-	    $self->SUPER::set($state, 'owfs');
+	    $self->SUPER::set ($state);
 	}
     }
 }
 
 # This method is called when the response for a write request to owserver returns.
 sub process_write_response {
-    my ($self, $response, $token, $value) = @_;
+    my ($self, $response, $token, $value, $set_by) = @_;
     my $device = $self->{device};
     my $location = $self->{location};
-    my $state = $self->convert_state($value);
     my $type = $self->isa('Owfs_Item');
     if (defined $response) {
 	my $debug = $self->{debug} || $main::Debug{owfs};
 	&main::print_log ("Owfs_Item::process_write_response type: $type device: $device location: $location response: $response token: $token value: $value") if $debug;
+	my $state = $self->convert_state($value);
 	if ($state ne $self->state( )) {
-	    $self->SUPER::set($state, 'owfs');
+	    $self->SUPER::set ($state, $set_by);
 	}
     }
 }
@@ -318,7 +318,7 @@ sub process_dir_response {
 		$self->{path} = $token . "/";
 		$self->{present} = 1;
 		$objects_by_id{$id} = $self;
-		&main::print_log ("Owfs_Item::DEVICE_DISCOVERY: device: $device location: $location family: $family id: $id root: $path path: $token") if $main::Debug{owfs};
+		&main::print_log ("Owfs_Item::DEVICE_DISCOVERY: device: $device location: $location family: $family id: $id root: $path path: $token"); # if $main::Debug{owfs};
 		$self->discovered( );
 		return;
 	    } elsif (($1 eq "1F") || ($leaf =~ /aux$/) || ($leaf =~ /main$/)) {
@@ -330,7 +330,7 @@ sub process_dir_response {
 
 # This method is called to schedule a write command be sent to the owserver for the object.
 sub set {
-    my ($self, $token, $value) = @_;
+    my ($self, $token, $value, $set_by) = @_;
     return if (!defined $self->{path});
     my $path = $self->{path} . $token;
     my $debug = $self->{debug} || $main::Debug{owfs};
@@ -340,7 +340,7 @@ sub set {
     #$value .= ' ';
     my $value_length = length($value);
     my $payload = pack( 'Z'.$path_length.'A'.$value_length,$path,$value );
-    $self->_ToServer($path,$token,$value,length($payload)+1, $msg_write, $value_length, 0, $payload);
+    $self->_ToServer($path,$token,$value,$set_by,length($payload)+1, $msg_write, $value_length, 0, $payload);
 }
 
 # This method is called to schedule a read command be sent to the owserver for the object.
@@ -349,7 +349,7 @@ sub get {
     return if (!defined $self->{path});
     my $path = $self->{path} . $token;
     &main::print_log ("Owfs_Item::get path: $path") if $main::Debug{owfs};
-    $self->_ToServer($path,$token,0,length($path)+1,$msg_read,$default_block,0,$path);
+    $self->_ToServer($path,$token,0,0,length($path)+1,$msg_read,$default_block,0,$path);
 }
 
 # This method is called to schedule a directory command be sent to the owserver for the object.
@@ -359,14 +359,14 @@ sub _dir {
     # new msg_dirall method -- single packet
     &main::print_log ("Owfs_Item::dir path: $path") if $main::Debug{owfs};
     $self->{dir_path} = $path;
-    $self->_ToServer($path,0,0,length($path)+1,$msg_dirall,$default_block,0,$path);
+    $self->_ToServer($path,0,0,0,length($path)+1,$msg_dirall,$default_block,0,$path);
 }
 
 # This method is called to schedule a write command be sent to the owserver for the object.
 # The path used will be the device root instead of the device itself.  If the $token value
 # is preceeded with a "/", then the token value will be used as a raw path.
 sub _set_root {
-    my ($self, $token, $value) = @_;
+    my ($self, $token, $value, $set_by) = @_;
     my $root = $self->{root};
     return if (!defined $root);
     my $path = $self->{root} . $token;
@@ -378,7 +378,7 @@ sub _set_root {
     #$value .= ' ';
     my $value_length = length($value) ;
     my $payload = pack( 'Z'.$path_length.'A'.$value_length,$path,$value ) ;
-    $self->_ToServer($path,$token,$value,length($payload)+1, $msg_write, $value_length, 0, $payload);
+    $self->_ToServer($path,$token,$value,$set_by,length($payload)+1, $msg_write, $value_length, 0, $payload);
 }
 
 # This method is called to schedule a read command be sent to the owserver for the object.
@@ -390,7 +390,7 @@ sub _get_root {
     return if (!defined $root);
     my $path = $self->{root} . $token;
     &main::print_log ("Owfs_Item::_get_root path: $path") if $main::Debug{owfs};
-    $self->_ToServer($path,$token,0,length($path)+1,$msg_read,$default_block,0,$path) ;
+    $self->_ToServer($path,$token,0,0,length($path)+1,$msg_read,$default_block,0,$path) ;
 }
 
 # This method is used to search the one-wire tree for the specific object as defined
@@ -401,9 +401,12 @@ sub _discover {
     my $location = $self->{location};
     my $family = $self->{family};
     my $id = $self->{id};
-    &main::print_log ( "Owfs_Item::_discover family: $family id: $id") if $main::Debug{owfs};
+    my $path = $self->{path};
+    &main::print_log ( "Owfs_Item::_discover family: $family id: $id path: $path"); # if $main::Debug{owfs};
     return if (defined $self->{path});
-    $self->_find ( $family, $id, 0, "/" );
+    if (!$self->{active}) {
+	$self->_find ( $family, $id, 0, "/" );
+    }
     if (!$self->get_present( )) {
 	$self->{discover_timer}->set(5, sub {Owfs_Item::_discover($self);});
     }
@@ -432,7 +435,7 @@ sub _lost {
     my $family = $self->{family};
     my $id = $self->{id};
     my $path = $self->{path};
-    &main::print_log ("Owfs_Item::DEVICE_LOST: device: $device location: $location family: $family id: $id path: $path") if $main::Debug{owfs};
+    &main::print_log ("Owfs_Item::DEVICE_LOST: device: $device location: $location family: $family id: $id path: $path"); # if $main::Debug{owfs};
     $self->{root} = undef;
     $self->{path} = undef;
     $self->{present} = 0;
@@ -471,12 +474,12 @@ sub _chomp_plus {
 # This method is a direct port from the OWNet.pm module from owfs.  This is the lower layer interface
 # to the owserver socket port.
 sub _ToServer {
-    my ($self, $path, $token, $value, $payload_length, $msg_type, $size, $offset, $payload_data) = @_ ;
+    my ($self, $path, $token, $value, $set_by, $payload_length, $msg_type, $size, $offset, $payload_data) = @_ ;
     my $f = "N6Z$payload_length";
     #$f .= 'Z'.$payload_length if ( $payload_length > 0 ) ;
     my $message = pack($f,$self->{VER},$payload_length,$msg_type,$self->{SG}|$self->{PERSIST},$size,$offset,$payload_data);
     &main::print_log ( "Owfs_Item::_ToServer path: $path payload_length: $payload_length payload_data: $payload_data message: $message") if $main::Debug{owfs};
-    my $hashref = { msg_type => $msg_type, self => $self, path => $path, token => $token, value => $value, message => $message };
+    my $hashref = { msg_type => $msg_type, self => $self, path => $path, token => $token, value => $value, set_by => $set_by, message => $message };
     push @queue, $hashref;
     $self->{active}++;
     my $num = scalar(@queue);
@@ -568,6 +571,7 @@ sub _run_loop {
     my $path     = $hashref->{path};
     my $token    = $hashref->{token};
     my $value    = $hashref->{value};
+    my $set_by   = $hashref->{set_by};
     my $device   = $self->{device};
     my $location = $self->{location};
     my $popped   = 0;
@@ -643,7 +647,7 @@ sub _run_loop {
 		    # process response
 		    &main::print_log ( "Owfs_Item::_run_loop msg_type: $msg_type path: $path response: $response[2]") if $main::Debug{owfs};
 		    $self->{failcnt} = 0;
-		    $self->process_write_response(($response[2] >= 0), $token, $value);
+		    $self->process_write_response(($response[2] >= 0), $token, $value, $set_by);
 		}
 		shift @queue;
 		$popped = 1;
@@ -765,7 +769,7 @@ Usage:
  <location>  - ASCII string identifier providing a useful name for device_id
  <channel>   - "0", "1", "2", "3", "4", "5", "6", "7"
  <mode>      - Identifies what is stored in <state> 0: $PIO (Relay) 1: Sense 2: Latch
- <interval>  - Optional (defaults to 2).  Number of seconds between input samples.
+ <interval>  - Optional (defaults to 1).  Number of seconds between input samples.
 
  Examples:
 
@@ -833,6 +837,10 @@ sub new {
     $self->{pio} = undef;
     $self->{latch} = 0;
     $self->{sensed} = undef;
+    $self->{pio_state} = undef;
+    $self->{pend_set_by} = undef;
+
+    $self->restore_data ( 'pio_state', 'pend_set_by' );
 
     $latch_store{$device} = 0;
     if (!exists $latch_mask{$device}) {
@@ -861,17 +869,27 @@ sub get_interval {
 }
 
 sub set {
-    my ($self,$value) = @_;
+    my ($self,$state,$set_by) = @_;
     my $mode = $self->{mode};
     my $debug = $self->{debug} || $main::Debug{owfs};
-    &main::print_log ("Owfs_Switch::set mode: $mode value: $value") if $debug;
+    my $device = $self->{device};
+    my $location = $self->{location};
+    my $channel = $self->{channel};
+    &main::print_log ("Owfs_Switch::set mode: $mode state: $state") if $debug;
     if ($mode == $PIO) {
-	my $channel = $self->{channel};
-	my $pio = "PIO";
-	if (defined $channel) {
-	    $pio .= ".$channel";
+        my $value = $self->convert_value($state);
+	$state = $self->convert_state($value);
+	if (($state eq $ON) || ($state eq $OFF)) {
+	    &main::print_log ("Owfs_Switch::set mode: $mode device: $device location: $location channel: $channel state: $state") if $debug;
+	    $self->{pio_state} = $state;
+	    $self->{pend_set_by} = $set_by;
+	    # Let's just do it now!
+	    if ($state ne $self->state( )) {
+		$self->run_loop( );
+	    }
+	} else {
+	    &main::print_log ("Owfs_Switch::set ERROR mode: $mode Unknown state: $state"); # if $debug;
 	}
-	$self->SUPER::set ($pio, $value);
     }
 }
 
@@ -922,7 +940,7 @@ sub discovered {
 	    $pio .= ".$channel";
 	}
 	&main::print_log ( "Owfs_Item::discovered mode: $mode pio: $pio setting $PIO to 0");
-	$self->SUPER::set( $pio, $OFF );
+	$self->SUPER::set ($pio, $OFF);
     }
 }
 
@@ -1025,7 +1043,7 @@ sub process_read_response {
 }
 
 sub process_write_response {
-    my ($self, $response, $token, $value) = @_;
+    my ($self, $response, $token, $value, $set_by) = @_;
     my $device = $self->{device};
     my $location = $self->{location};
     my $channel = $self->{channel};
@@ -1034,7 +1052,7 @@ sub process_write_response {
     &main::print_log ("Owfs_Switch::process_write_response device: $device location: $location channel: $channel mode: $mode token: $token value: $value response: $response") if $debug;
     if (defined $response) {
 	if (($mode == $PIO) && ($token =~ /PIO/)) {
-	    $self->SUPER::process_write_response($response,$token,$value);
+	    $self->SUPER::process_write_response($response,$token,$value,$set_by);
 	}
     }
 }
@@ -1054,11 +1072,20 @@ sub run_loop {
     my $mode = $self->{mode};
     my $present = $self->{present};
     my $active = $self->{active};
+    my $state = $self->state( );
+    my $pio_state = $self->{pio_state};
     my $debug = $self->{debug} || $main::Debug{owfs};
-    &main::print_log ("Owfs_Switch::run_loop $device $location $channel mode: $mode present: $present active: $active") if $debug;
+    &main::print_log ("Owfs_Switch::run_loop device: $device location: $location channel: $channel mode: $mode present: $present active: $active pio: $pio state: $state pio_state: $pio_state") if $debug;
     if (($self->{active} == 0) && $self->{present}) {
 	if ($mode == $PIO) {
-	    $self->SUPER::get ($pio);
+	    if (defined $pio_state and ($state ne $pio_state)) {
+		$self->SUPER::set ($pio, $pio_state, $self->{pend_set_by});
+		$self->{pend_set_by} = undef;
+		&main::print_log ("Owfs_Switch::run_loop set device: $device location: $location channel: $channel mode: $mode present: $present active: $active pio: $pio state: $state pio_state: $pio_state") if $debug;
+	    } else {
+		&main::print_log ("Owfs_Switch::run_loop get device: $device location: $location channel: $channel mode: $mode present: $present active: $active pio: $pio state: $state pio_state: $pio_state") if $debug;
+		$self->SUPER::get ($pio);
+	    }
 	} elsif ($mode == $SENSE) {
 	    $self->SUPER::get ("sensed.$channel");
 	} elsif ($mode == $LATCH) {
@@ -1210,7 +1237,7 @@ sub process_read_response {
 
 # This method is called when the response for a write request to owserver returns.
 sub process_write_response {
-    my ($self, $response, $token, $value) = @_;
+    my ($self, $response, $token, $value, $set_by) = @_;
     my $device = $self->{device};
     my $location = $self->{location};
     &main::print_log ("Owfs_DS18S20::process_write_response $device $location response: $response token: $token value: $value") if $main::Debug{owfs};
@@ -1697,7 +1724,7 @@ sub process_read_response {
 
 # This method is called when the response for a write request to owserver returns.
 sub process_write_response {
-    my ($self, $response, $token, $value) = @_;
+    my ($self, $response, $token, $value, $set_by) = @_;
     my $device = $self->{device};
     my $location = $self->{location};
     &main::print_log ("Owfs_DS2450::process_write_response $device $location response: $response token: $token value: $value") if $main::Debug{owfs};

@@ -130,7 +130,7 @@ sub watch_dog {
        if (!$self->{m_timerOccupancyExpire}->active( )) {
 	   &::print_log("$$self{object_name}: watch_dog, occupied without timer!") if $self->{debug};
 	   if (defined $self->{m_occupancy_expire}) {
-	       &::print_log("$$self{object_name}: occupancy timer set $$self{m_occupancy_expire}, watchdog condition!") if $self->{debug};
+	       &::print_log("$$self{object_name}: occupancy timer set $$self{m_occupancy_expire}, watchdog condition!");
 	       $self->{m_timerOccupancyExpire}->set($self->{m_occupancy_expire}, $self);
 	       $self->{wdog_interval} = $self->{m_occupancy_expire}+2;
 	   }

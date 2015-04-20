@@ -251,7 +251,7 @@ sub process_cid_data {
                                 # Clean up Dock-N-Talk data
 #   ###DATE...NMBR5071234567...NAMEDock-N-Talk+++
 #   ###DATE...NMBR...NAME   -MSG OFF-+++
-    return if $data =~ /-MSG OFF-/;
+    #return if $data =~ /-MSG OFF-/;
     $data =~ s/Dock-N-Talk//;
 
     my $type = $type_by_port{$port};
